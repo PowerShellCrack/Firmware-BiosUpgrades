@@ -32,7 +32,7 @@ function Write-LogEntry {
         [string]$Value,
 
         [parameter(Mandatory=$false)]
-        [ValidateSet(0,1,2,3,4)]
+        [ValidateSet(0,1,2,3)]
         [int16]$Severity,
 
         [parameter(Mandatory=$false, HelpMessage="Name of the log file that the entry will written to.")]
@@ -78,7 +78,6 @@ function Write-LogEntry {
             1       {Write-Host $Value}
             2       {Write-Warning $Value}
             3       {Write-Host $Value -ForegroundColor Red}
-            4       {Write-Verbose $Value}
             default {Write-Host $Value}
         }
     }
@@ -130,14 +129,13 @@ Switch($BIOSManufacturer){
     "Hewlett-Packard"                       {$FlashUtility = "AFUDOS.exe"}
     "American Megatrends Inc."              {$FlashUtility = "AFUDOS.exe"}
     "Phoenix Technologies LTD"              {$FlashUtility = "PHLASH16.EXE"}
-    "GIGABYTE"                              {$FlashUtility = "Efiflash.exe"}
     default                                 {$FlashUtility = "Flash64W.exe"}
 }
 
 #Remove any special characters from Manufacturer to support folders name
 $Regex = "[^{\p{L}\p{Nd}}]+"
 $ComputerMake = ($BIOSManufacturer -replace $Regex, " ").Trim()
-#http://downloads.dell.com/catalog/DriverPackCatalog.cab
+
 
 #Get Model
 $ComputerModel = Get-WmiObject -Class Win32_computersystem | Select-Object -ExpandProperty Model
@@ -163,8 +161,8 @@ If($BiosFiles){
         }Else{
             $tsenv.Value("SMSTS_MutipleBIOSUpdatesFound") = "False"
         }
-    
     }
+
     #set bios count to one
     $i = 1
 
@@ -234,10 +232,6 @@ If($BiosFiles){
                                     $AddArgs = " /S";
                                     If($BiosPassword){$AddArgs += " /pass=$BiosPassword"}
                                   }
-                "Efiflash.exe"  {
-                                    $fileArg = $BIOSFilePath;
-                                    $AddArgs = "";
-                                  }
 
             }
 
@@ -246,7 +240,7 @@ If($BiosFiles){
             If( !(Test-Path $FlashUtilityPath) ){Exit}
 
             
-            if ($inPE) {
+            if ($tsenv -and $inPE) {
                 Write-LogEntry "Script is running in Windows Preinstallation Environment (PE)" -Outhost
             }
             Else{
@@ -277,7 +271,7 @@ If($BiosFiles){
                     }
 
                 2   {
-                        Write-LogEntry ("BIOS installed succesfully but a reboot is required") -Outhost
+                        Write-LogEntry ("BIOS installed succesfully. A reboot is required") -Outhost
                         If($tsenv){$tsenv.Value("SMSTS_BiosRebootRequired") = "True"}
                     }
 
@@ -313,7 +307,8 @@ If($BiosFiles){
 
     }
 }
-Else{
+Else
+{
     Write-LogEntry ("No BIOS Found for model: {0}, skipping..." -f $ComputerModel) -Outhost
 }
 
