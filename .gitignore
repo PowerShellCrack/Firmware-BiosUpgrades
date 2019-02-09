@@ -1,3 +1,8 @@
-/Tools/*
-/BIOS/*
-/Temp/*
+*.exe
+*.efi
+*.bin
+*.FL1
+*.F1
+*.81A
+*.sys
+*.EVS
