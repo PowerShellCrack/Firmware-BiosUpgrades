@@ -25,24 +25,132 @@
 ##*===========================================================================
 ##* FUNCTIONS
 ##*===========================================================================
-function Write-LogEntry {
-    param(
-        [parameter(Mandatory=$true, HelpMessage="Value added to the log file.")]
-        [ValidateNotNullOrEmpty()]
-        [string]$Value,
+Function Test-IsISE {
+    # try...catch accounts for:
+    # Set-StrictMode -Version latest
+    try {    
+        return $psISE -ne $null;
+    }
+    catch {
+        return $false;
+    }
+}
 
+Function Get-ScriptPath {
+    If (Test-Path -LiteralPath 'variable:HostInvocation') { $InvocationInfo = $HostInvocation } Else { $InvocationInfo = $MyInvocation }
+
+    # Makes debugging from ISE easier.
+    if ($PSScriptRoot -eq "")
+    {
+        if (Test-IsISE)
+        {
+            $psISE.CurrentFile.FullPath
+            #$root = Split-Path -Parent $psISE.CurrentFile.FullPath
+        }
+        else
+        {
+            $context = $psEditor.GetEditorContext()
+            $context.CurrentFile.Path
+            #$root = Split-Path -Parent $context.CurrentFile.Path
+        }
+    }
+    else
+    {
+        #$PSScriptRoot
+        $PSCommandPath
+        #$MyInvocation.MyCommand.Path
+    }
+}
+
+
+Function Get-SMSTSENV{
+    param(
+        [switch]$ReturnLogPath,
+        [switch]$NoWarning
+    )
+    
+    Begin{
+        ## Get the name of this function
+        [string]${CmdletName} = $PSCmdlet.MyInvocation.MyCommand.Name
+    }
+    Process{
+        try{
+            # Create an object to access the task sequence environment
+            $Script:tsenv = New-Object -COMObject Microsoft.SMS.TSEnvironment 
+        }
+        catch{
+            If(${CmdletName}){$prefix = "${CmdletName} ::" }Else{$prefix = "" }
+            If(!$NoWarning){Write-Warning ("{0}Task Sequence environment not detected. Running in stand-alone mode." -f $prefix)}
+            
+            #set variable to null
+            $Script:tsenv = $null
+        }
+        Finally{
+            #set global Logpath
+            if ($Script:tsenv){
+                #grab the progress UI
+                $Script:TSProgressUi = New-Object -ComObject Microsoft.SMS.TSProgressUI
+
+                # Convert all of the variables currently in the environment to PowerShell variables
+                $tsenv.GetVariables() | % { Set-Variable -Name "$_" -Value "$($tsenv.Value($_))" }
+                
+                # Query the environment to get an existing variable
+                # Set a variable for the task sequence log path
+                
+                #Something like: C:\MININT\SMSOSD\OSDLOGS
+                #[string]$LogPath = $tsenv.Value("LogPath")
+                #Somthing like C:\WINDOWS\CCM\Logs\SMSTSLog
+                [string]$LogPath = $tsenv.Value("_SMSTSLogPath")
+                
+            }
+            Else{
+                [string]$LogPath = $env:Temp
+            }
+        }
+    }
+    End{
+        If($ReturnLogPath){return $LogPath}
+    }
+}
+
+
+Function Format-ElapsedTime($ts) {
+    $elapsedTime = ""
+    if ( $ts.Minutes -gt 0 ){$elapsedTime = [string]::Format( "{0:00} min. {1:00}.{2:00} sec.", $ts.Minutes, $ts.Seconds, $ts.Milliseconds / 10 );}
+    else{$elapsedTime = [string]::Format( "{0:00}.{1:00} sec.", $ts.Seconds, $ts.Milliseconds / 10 );}
+    if ($ts.Hours -eq 0 -and $ts.Minutes -eq 0 -and $ts.Seconds -eq 0){$elapsedTime = [string]::Format("{0:00} ms.", $ts.Milliseconds);}
+    if ($ts.Milliseconds -eq 0){$elapsedTime = [string]::Format("{0} ms", $ts.TotalMilliseconds);}
+    return $elapsedTime
+}
+
+Function Format-DatePrefix{
+    [string]$LogTime = (Get-Date -Format 'HH:mm:ss.fff').ToString()
+	[string]$LogDate = (Get-Date -Format 'MM-dd-yyyy').ToString()
+    $CombinedDateTime = "$LogDate $LogTime"
+    return ($LogDate + " " + $LogTime)
+}
+
+Function Write-LogEntry{
+    param(
+        [Parameter(Mandatory=$true,Position=0,ValueFromPipeline=$true,ValueFromPipelineByPropertyName=$true)]
+        [ValidateNotNullOrEmpty()]
+        [string]$Message,
+        [Parameter(Mandatory=$false,Position=2)]
+		[string]$Source = '',
         [parameter(Mandatory=$false)]
         [ValidateSet(0,1,2,3,4)]
         [int16]$Severity,
 
         [parameter(Mandatory=$false, HelpMessage="Name of the log file that the entry will written to.")]
         [ValidateNotNullOrEmpty()]
-        [string]$fileArgName = $LogFilePath,
+        [string]$OutputLogFile = $Global:LogFilePath,
 
         [parameter(Mandatory=$false)]
         [switch]$Outhost
     )
-    
+    ## Get the name of this function
+    [string]${CmdletName} = $PSCmdlet.MyInvocation.MyCommand.Name
+
     [string]$LogTime = (Get-Date -Format 'HH:mm:ss.fff').ToString()
 	[string]$LogDate = (Get-Date -Format 'MM-dd-yyyy').ToString()
 	[int32]$script:LogTimeZoneBias = [timezone]::CurrentTimeZone.GetUtcOffset([datetime]::Now).TotalMinutes
@@ -63,36 +171,42 @@ function Write-LogEntry {
     
     
     If(!$Severity){$Severity = 1}
-    $LogFormat = "<![LOG[$Value]LOG]!>" + "<time=`"$LogTimePlusBias`" " + "date=`"$LogDate`" " + "component=`"$ScriptSource`" " + "context=`"$([Security.Principal.WindowsIdentity]::GetCurrent().Name)`" " + "type=`"$Severity`" " + "thread=`"$PID`" " + "file=`"$ScriptSource`">"
+    $LogFormat = "<![LOG[$Message]LOG]!>" + "<time=`"$LogTimePlusBias`" " + "date=`"$LogDate`" " + "component=`"$ScriptSource`" " + "context=`"$([Security.Principal.WindowsIdentity]::GetCurrent().Name)`" " + "type=`"$Severity`" " + "thread=`"$PID`" " + "file=`"$ScriptSource`">"
     
     # Add value to log file
     try {
-        Out-File -InputObject $LogFormat -Append -NoClobber -Encoding Default -FilePath $LogFilePath -ErrorAction Stop
+        Out-File -InputObject $LogFormat -Append -NoClobber -Encoding Default -FilePath $OutputLogFile -ErrorAction Stop
     }
-    catch [System.Exception] {
-        Write-LogEntry -Message "Unable to append log entry to $LogFilePath file"
+    catch {
+        Write-Host ("[{0}] [{1}] :: Unable to append log entry to [{1}], error: {2}" -f $LogTimePlusBias,$ScriptSource,$OutputLogFile,$_.Exception.ErrorMessage) -ForegroundColor Red
     }
     If($Outhost){
+        If($Source){
+            $OutputMsg = ("[{0}] [{1}] :: {2}" -f $LogTimePlusBias,$Source,$Message)
+        }
+        Else{
+            $OutputMsg = ("[{0}] [{1}] :: {2}" -f $LogTimePlusBias,$ScriptSource,$Message)
+        }
+
         Switch($Severity){
-            0       {Write-Host $Value -ForegroundColor Gray}
-            1       {Write-Host $Value}
-            2       {Write-Warning $Value}
-            3       {Write-Host $Value -ForegroundColor Red}
-            4       {Write-Verbose $Value}
-            default {Write-Host $Value}
+            0       {Write-Host $OutputMsg -ForegroundColor Green}
+            1       {Write-Host $OutputMsg -ForegroundColor Gray}
+            2       {Write-Warning $OutputMsg}
+            3       {Write-Host $OutputMsg -ForegroundColor Red}
+            4       {If($Global:Verbose){Write-Verbose $OutputMsg}}
+            default {Write-Host $OutputMsg}
         }
     }
 }
 
-
 ##*===========================================================================
 ##* VARIABLES
 ##*===========================================================================
-## Instead fo using $PSScriptRoot variable, use the custom InvocationInfo for ISE runs
-If (Test-Path -LiteralPath 'variable:HostInvocation') { $InvocationInfo = $HostInvocation } Else { $InvocationInfo = $MyInvocation }
-[string]$scriptDirectory = Split-Path -Path $InvocationInfo.MyCommand.Definition -Parent
-[string]$scriptPath = $InvocationInfo.MyCommand.Definition
-[string]$scriptName = [IO.Path]::GetFileNameWithoutExtension($scriptPath)
+# Use function to get paths because Powershell ISE and other editors have differnt results
+$scriptPath = Get-ScriptPath
+[string]$scriptDirectory = Split-Path $scriptPath -Parent
+[string]$scriptName = Split-Path $scriptPath -Leaf
+[string]$scriptBaseName = [System.IO.Path]::GetFileNameWithoutExtension($scriptName)
 
 #Create Paths
 $BIOSPath = Join-Path $scriptDirectory -ChildPath BIOS
